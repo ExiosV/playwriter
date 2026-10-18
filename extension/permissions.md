@@ -87,6 +87,15 @@ Detects navigation and when a controlled tab opens a popup or new navigation
 target. This lets Playwriter re-inject its toolbar after navigation and keep an
 OAuth or payment popup with the tab that opened it.
 
+### sessions
+
+Reads the user's cloud (synced) tabs — the tabs open on their other signed-in
+browser devices — only when the user runs `playwriter cloud-tabs` or the
+`cloud_tabs` MCP tool. The user explicitly asks for the listing; nothing is read
+in the background, and the data stays on the user's own computer (the local
+relay), never sent to Playwriter servers. Cloud tabs are unavailable over Remote
+control.
+
 ### host_permissions (`<all_urls>`)
 
 Required because users can choose to automate a tab on any website. Playwriter
@@ -231,6 +240,9 @@ summary:
 > local relay. These values are not sent through Remote control.
 >
 > **webNavigation:** Track navigation and popups opened by connected tabs.
+>
+> **sessions:** Read the user's cloud (synced) tabs from other signed-in devices,
+> only when the user asks for them.
 >
 > **host permissions:** Allow debugger attachment on any site the user chooses to
 > automate.

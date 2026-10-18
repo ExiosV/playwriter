@@ -48,6 +48,7 @@ import { appendSessionToWsUrl } from './chrome-discovery.js'
 import * as relayState from './relay-state.js'
 import { WebSocket as NodeWebSocket } from 'ws'
 import { getRemoteDialRetryMs, parseRemoteControlUrl, type RemoteHelloMessage } from './remote-control.js'
+import { EMPTY_CLOUD_TABS } from './cloud-tabs.js'
 import type { CloudAuth } from './cloud-client.js'
 import { recordExecute, trackEvent, type SessionKind } from './telemetry.js'
 
@@ -2372,6 +2373,67 @@ export async function startPlayWriterCDPRelayServer({
   app.get('/cli/sessions', async (c) => {
     const manager = await getExecutorManager()
     return c.json({ sessions: manager.listSessions() })
+  })
+
+  // Cloud (synced) tabs from the user's other signed-in browser devices, read
+  // through the extension's chrome.sessions API. Chrome Sync, Yandex Browser
+  // sync, Edge and Brave all back that API, but it is extension-only: CDP has
+  // no equivalent, so this needs a connected extension even when sessions use
+  // the direct CDP transport.
+  app.get('/cli/cloud-tabs', async (c) => {
+    const requestedId = c.req.query('extensionId') || null
+    const allowDefault = !requestedId && relayState.getLocalExtensions(store.getState()).length === 1
+    const conn = getExtensionConnection(requestedId, { allowFallback: allowDefault })
+    if (!conn) {
+      const extensions = relayState.getLocalExtensions(store.getState()).map((extension) => ({
+        extensionId: extension.id,
+        browser: extension.info.browser ?? null,
+        email: extension.info.email ?? null,
+      }))
+      return c.json(
+        {
+          error:
+            extensions.length === 0
+              ? 'No browser extension is connected'
+              : 'Several extensions are connected; pass extensionId',
+          code: 'no-extension',
+          extensions,
+        },
+        409,
+      )
+    }
+    try {
+      const result = await sendToExtension({ extensionId: conn.id, method: 'getCloudTabs', timeout: 15000 })
+      return c.json(result ?? EMPTY_CLOUD_TABS)
+    } catch (error: any) {
+      return c.json({ error: error?.message || String(error) }, 502)
+    }
+  })
+
+  // Open one cloud tab as a normal tab in the browser the user is looking at.
+  app.post('/cli/cloud-tabs/open', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { extensionId?: string | null; url?: string }
+    const url = typeof body.url === 'string' ? body.url.trim() : ''
+    if (!url) {
+      return c.json({ error: 'url is required' }, 400)
+    }
+    const requestedId = body.extensionId || null
+    const allowDefault = !requestedId && relayState.getLocalExtensions(store.getState()).length === 1
+    const conn = getExtensionConnection(requestedId, { allowFallback: allowDefault })
+    if (!conn) {
+      return c.json({ error: 'No browser extension is connected', code: 'no-extension' }, 409)
+    }
+    try {
+      const result = await sendToExtension({
+        extensionId: conn.id,
+        method: 'openCloudTab',
+        params: { url },
+        timeout: 15000,
+      })
+      return c.json(result ?? { success: true })
+    } catch (error: any) {
+      return c.json({ error: error?.message || String(error) }, 502)
+    }
   })
 
   app.get('/cli/session/suggest', (c) => {

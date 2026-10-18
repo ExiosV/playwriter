@@ -163,6 +163,36 @@ Set `PLAYWRITER_EXTENSION=1` to force the extension transport instead of the def
 
 **Limitations:** screen recording (`recording.start`/`recording.stop`) is not available in direct CDP mode since it relies on the extension's `chrome.tabCapture` API.
 
+### Cloud (synced) tabs
+
+Cloud tabs are the tabs open on the user's **other signed-in browser devices** —
+Chrome Sync, Yandex Browser sync, Edge and Brave all expose them through the
+extension `chrome.sessions` API. Playwriter already supports them: list them and
+open one in the user's browser.
+
+```bash
+# List cloud tabs from the user's other devices
+playwriter cloud-tabs
+
+# Raw JSON, or pick one browser when several extensions are connected
+playwriter cloud-tabs --json
+playwriter cloud-tabs --extension <extensionId>
+
+# Open a tab in the user's browser: by list number, url, or unique url fragment
+playwriter cloud-tabs --open 3
+playwriter cloud-tabs --open https://docs.example.com/page
+playwriter cloud-tabs --open docs.example
+```
+
+Cloud tabs are **extension-only**: CDP has no equivalent of `chrome.sessions`, so
+this works even when sessions use the default direct CDP transport, but it needs
+the Playwriter extension connected to the relay. Without an extension the command
+explains what is missing. In MCP the same data is available through the
+`cloud_tabs` tool (`open` behaves like `--open`).
+
+Users must be signed in to browser sync on this and at least one other device and
+have tab syncing enabled; otherwise the listing is empty.
+
 ### Remote control (drive another user's browser)
 
 When a user shares their browser with you, they send a secret **id** (created by clicking the **Remote control** button in the Playwriter toolbar). The user needs no playwriter install, only the extension.

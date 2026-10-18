@@ -31,6 +31,11 @@ The MCP exposes:
 
 - `execute` tool - run Playwright code snippets
 - `reset` tool - reconnect if connection issues occur
+- `cloud_tabs` tool - list the user's cloud (synced) tabs from other signed-in browser devices (Chrome Sync, Yandex, Edge, Brave) and optionally open one
+
+`cloud_tabs` reads the extension `chrome.sessions` API, so it needs the Playwriter
+extension connected even when sessions use the default direct CDP transport. The
+same data is available from the CLI with `playwriter cloud-tabs`.
 
 ## Direct CDP
 
