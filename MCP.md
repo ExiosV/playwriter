@@ -32,9 +32,25 @@ The MCP exposes:
 - `execute` tool - run Playwright code snippets
 - `reset` tool - reconnect if connection issues occur
 
-## Direct CDP (no extension needed)
+## Direct CDP
 
-Connect directly to Chrome's DevTools Protocol without the extension. Set `PLAYWRITER_DIRECT` in your MCP config:
+Direct CDP is the **default transport** in this fork: on startup the MCP server
+scans every known Chromium browser's `DevToolsActivePort` file plus the default
+CDP ports (`9222`, `9223`, ...) and connects to the first instance with debugging
+enabled. Supported: Chrome, Chromium, Edge, Brave, Yandex, Vivaldi, Opera on
+macOS, Windows and Linux. If nothing is found it falls back to the extension
+transport automatically.
+
+Enable debugging in the browser you want to drive:
+
+- **Chrome / Edge / Brave** — open `chrome://inspect/#remote-debugging` and turn
+  the toggle on, or launch with `--remote-debugging-port=9222`.
+- **Yandex** — open `browser://inspect/#remote-debugging` and turn the toggle on,
+  or launch Yandex with `--remote-debugging-port=9222 --user-data-dir=<dir>`
+  (Yandex is Chromium 150+, so the Chrome 136+ default-profile restriction
+  applies — a dedicated `--user-data-dir` is required with an explicit flag).
+
+To force direct mode explicitly, set `PLAYWRITER_DIRECT`:
 
 ```json
 {
@@ -50,11 +66,11 @@ Connect directly to Chrome's DevTools Protocol without the extension. Set `PLAYW
 }
 ```
 
-Enable debugging in Chrome first: open `chrome://inspect/#remote-debugging` or launch with `--remote-debugging-port=9222`.
+You can also pass an explicit WebSocket endpoint: `PLAYWRITER_DIRECT=ws://127.0.0.1:9222/devtools/browser/abc`.
+
+To force the extension transport instead, set `PLAYWRITER_EXTENSION=1`.
 
 Chrome 136+ may show an approval dialog the first time a connection is made.
-
-You can also pass an explicit WebSocket endpoint: `PLAYWRITER_DIRECT=ws://127.0.0.1:9222/devtools/browser/abc`.
 
 **Limitation:** screen recording is unavailable in direct mode.
 
