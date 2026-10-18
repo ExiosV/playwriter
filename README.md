@@ -294,6 +294,32 @@ Color-coded: yellow=links, orange=buttons, coral=inputs, pink=checkboxes, peach=
 
 > Chrome's `--remote-debugging-port` is ignored on your default profile since **Chrome 136**, so you must use a throwaway `--user-data-dir` with none of your logins. Connecting an external CDP client also shows an "Allow remote debugging?" dialog an agent cannot click. Playwriter uses an in-Chrome extension instead: no dialog, no flags, your real profile.
 
+### Direct CDP by default (Chrome, Chromium, Edge, Brave, Yandex)
+
+In this fork `session new` and the MCP server use **direct CDP by default**. On
+startup they scan every known Chromium browser's `DevToolsActivePort` file plus
+the default CDP ports (`9222`, `9223`, ...) and connect to the first instance
+that has debugging enabled. Supported browsers: **Chrome, Chromium, Edge, Brave,
+Yandex, Vivaldi and Opera** on macOS, Windows and Linux.
+
+Enable debugging in the browser you want to drive:
+
+- **Chrome / Edge / Brave** — open `chrome://inspect/#remote-debugging` and turn
+  the toggle on (no flags, your real profile, Chrome 144+), or launch the browser
+  with `--remote-debugging-port=9222`.
+- **Yandex** — open `browser://inspect/#remote-debugging` and enable the toggle,
+  or launch Yandex with `--remote-debugging-port=9222`. Yandex is based on
+  Chromium 150+, so the Chrome 136+ default-profile restriction applies: the
+  `browser://inspect` toggle is the way to debug your real profile; an explicit
+  `--remote-debugging-port` flag needs a non-default `--user-data-dir`.
+
+If no debug-enabled browser is found, `session new` falls back to the extension
+transport automatically. Force the extension with `--extension` (or
+`PLAYWRITER_EXTENSION=1` for the MCP server). Force direct with an explicit
+endpoint, e.g. `--direct ws://127.0.0.1:9222` or `--direct host:port`.
+
+Cloud browsers (`--browser cloud`) are unchanged and still available.
+
 ## Architecture
 
 ```

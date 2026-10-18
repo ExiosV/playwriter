@@ -89,25 +89,41 @@ playwriter -s 1 -e "state.page = await context.newPage(); await state.page.goto(
 
 For the full guide (Docker, LAN, MCP config, security), see: https://playwriter.dev/docs/remote-access
 
-### Direct CDP connection (no extension needed)
+### Direct CDP connection (default transport)
 
-Playwriter can connect directly to a Chrome instance via the Chrome DevTools Protocol, bypassing the browser extension entirely. This is useful for:
+Direct CDP is the **default** transport: `session new` and the MCP server scan
+each known browser's `DevToolsActivePort` file plus the default CDP ports
+(`9222`, `9223`, ...) and connect to the first instance with debugging enabled.
+Supported browsers: **Chrome, Chromium, Edge, Brave, Yandex, Vivaldi, Opera** on
+macOS, Windows and Linux. If no debug-enabled browser is found, the CLI falls
+back to the extension transport automatically; the MCP server does too.
+
+Connecting directly via the Chrome DevTools Protocol is useful for:
 
 - Chrome running with remote debugging enabled (CI, Docker, headless environments)
 - Cloud browser providers that expose a CDP endpoint (e.g. `wss://xxx.cdp.browser-use.com`)
 - Any service or machine that gives you a `ws://` or `wss://` URL to a Chrome DevTools session
 
-**Prerequisites:** you need a CDP-enabled Chrome. Either:
+**Prerequisites:** you need a CDP-enabled browser. Any of:
 
-- Open `chrome://inspect/#remote-debugging` in Chrome
-- Launch Chrome with `--remote-debugging-port=9222`
+- Open `chrome://inspect/#remote-debugging` in Chrome / Edge / Brave
+- Open `browser://inspect/#remote-debugging` in Yandex (Yandex is Chromium 150+,
+  so the default-profile restriction from Chrome 136 applies to explicit flags:
+  with `--remote-debugging-port` you must also pass a non-default `--user-data-dir`)
+- Launch the browser with `--remote-debugging-port=9222`
 - Use `playwriter browser start` (enables debugging automatically)
-- Use a cloud browser provider URL (no local Chrome needed)
+- Use a cloud browser provider URL (no local browser needed)
 
 **CLI usage:**
 
 ```bash
-# Auto-discover local Chrome instances with debugging enabled
+# Direct CDP is the default — no flag needed (auto-discovers Chrome / Edge / Brave / Yandex)
+playwriter session new
+
+# Force the extension transport
+playwriter session new --extension
+
+# Force direct auto-discovery
 playwriter session new --direct
 
 # Connect to a specific CDP endpoint (local or cloud browser provider)
@@ -139,9 +155,11 @@ playwriter -s 1 -e "state.page = await context.newPage(); await state.page.goto(
 
 `PLAYWRITER_DIRECT` accepts:
 
-- `1` — auto-discover Chrome on port 9222
+- `1` — auto-discover every Chromium browser with debugging enabled (Chrome, Chromium, Edge, Brave, Yandex, ...) via `DevToolsActivePort` files and the default CDP ports
 - `ws://` or `wss://` URL — explicit WebSocket endpoint (local or cloud browser provider)
 - `host:port` — resolves via HTTP probe to a ws:// URL
+
+Set `PLAYWRITER_EXTENSION=1` to force the extension transport instead of the default direct CDP.
 
 **Limitations:** screen recording (`recording.start`/`recording.stop`) is not available in direct CDP mode since it relies on the extension's `chrome.tabCapture` API.
 
@@ -424,7 +442,7 @@ You can collaborate with the user - they can help with captchas, difficult eleme
 }
 ```
 
-`PLAYWRITER_DIRECT` accepts `1` (auto-discover Chrome on port 9222), a `ws://` or `wss://` endpoint (including cloud browser providers), or `host:port`. Screen recording is not available in direct CDP mode since it relies on the extension's `chrome.tabCapture` API.
+`PLAYWRITER_DIRECT` accepts `1` (auto-discover every Chromium browser with debugging enabled — Chrome, Chromium, Edge, Brave, Yandex, ... — via `DevToolsActivePort` files and default CDP ports), a `ws://` or `wss://` endpoint (including cloud browser providers), or `host:port`. Direct CDP is the default transport; set `PLAYWRITER_EXTENSION=1` to force the extension. Screen recording is not available in direct CDP mode since it relies on the extension's `chrome.tabCapture` API.
 
 ## context variables
 

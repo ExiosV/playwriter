@@ -395,7 +395,8 @@ cli
   .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
   .option('--browser <key>', 'Browser key when multiple browsers are available. Special values: "headless" (launch headless Chrome, no extension), "cloud" (cloud browser with stealth/proxies)')
   .option('--patchright', 'Use @playwriter/patchright-core for stealth mode (bypasses bot detection)')
-  .option('--direct [endpoint]', 'Use direct CDP connection without the extension. Enable debugging first at chrome://inspect/#remote-debugging or launch Chrome with --remote-debugging-port=9222. Auto-discovers instances or accepts an explicit ws:// endpoint')
+  .option('--direct [endpoint]', 'Use direct CDP connection without the extension. This is the DEFAULT mode: auto-discovers Chrome, Edge, Brave and Yandex instances. Enable debugging first at chrome://inspect/#remote-debugging or launch the browser with --remote-debugging-port=9222. Also accepts an explicit ws:// endpoint or host:port')
+  .option('--extension', 'Force the browser-extension transport instead of the default direct CDP mode. Use when no browser has remote debugging enabled (e.g. Yandex on the default profile).')
   .option('--remote <id>', 'Connect to a browser another user shared via the extension `Remote control` button')
   .option('--proxy <region>', 'Enable residential proxy for cloud browser (e.g. us, de, jp). Disabled by default. Use for anti-detection or geo-targeting.')
   .option('--custom-proxy <url>', 'Custom proxy for cloud browser (host:port or user:pass@host:port)')
@@ -553,8 +554,21 @@ cli
       return
     }
 
-    // If --direct with no endpoint, discover Chrome instances
-    if (options.direct === '') {
+    // Default mode: direct CDP discovery.
+    //
+    // Unless the user explicitly asked for another transport (--extension,
+    // --browser, --remote, --host relay), try direct CDP first: enumerate every
+    // Chromium browser with debugging enabled (Chrome, Chromium, Edge, Brave,
+    // Yandex, ...). If none is found we transparently fall back to the
+    // extension transport below, so existing setups keep working.
+    const defaultDirectInstances: DiscoveredInstance[] =
+      !options.direct && !options.browser && !options.extension && isLocal
+        ? await discoverChromeInstances()
+        : []
+
+    // If --direct with no endpoint (or the default mode found instances),
+    // discover Chromium instances.
+    if (options.direct === '' || defaultDirectInstances.length > 0) {
       warnTabGroupUnsupported('direct CDP sessions')
       if (!isLocal) {
         console.error('Error: --direct auto-discovery only works locally.')
@@ -563,60 +577,66 @@ cli
         process.exit(1)
       }
       await ensureRelayForSessionCreation(isLocal)
-      console.log(pc.dim('Discovering Chrome instances with debugging enabled...'))
-      const instances = await discoverChromeInstances()
+      const instances =
+        defaultDirectInstances.length > 0 ? defaultDirectInstances : await discoverChromeInstances()
 
       if (instances.length === 0) {
-        console.error('No Chrome instances with debugging enabled found.')
-        console.error('')
-        console.error('Enable debugging in one of these ways:')
-        console.error('  1. Open chrome://inspect/#remote-debugging in Chrome')
-        console.error('  2. Launch Chrome with: chrome --remote-debugging-port=9222')
-        process.exit(1)
-      }
-
-      if (instances.length === 1 && !options.browser) {
-        const instance = instances[0]
-        const serverUrl = await getServerUrl(options.host)
-        const result = await createDirectSession({ serverUrl, cdpEndpoint: instance.wsUrl, browser: instance.browser, profiles: instance.profiles, token: options.token })
-        printSessionWarning(result)
-        const profileLabel = formatInstanceProfiles(instance)
-        printSessionCreated(
-          `Session ${result.id} created (direct CDP, ${instance.browser}${profileLabel}). Use with: playwriter -s ${result.id} -e "..."`,
-        )
-        console.log(pc.dim('NOTE: Recording unavailable in direct CDP mode.'))
-        return
-      }
-
-      // Multiple instances or --browser specified
-      const directOptions = instances.map((instance) => {
-        return instanceToBrowserOption(instance)
-      })
-
-      if (options.browser) {
-        const selected = directOptions.find((opt) => {
-          return opt.key === options.browser
-        })
-        if (!selected) {
-          await handleCloudBrowserNotFound(options.browser, { hasCloudOptions: false })
-          console.error(`Browser not found: ${options.browser}`)
-          console.error('Available: ' + directOptions.map((opt) => opt.key).join(', '))
+        if (options.direct === '') {
+          console.error('No Chromium instances with debugging enabled found.')
+          console.error('')
+          console.error('Enable debugging in one of these ways:')
+          console.error('  1. Chrome / Edge / Brave: open chrome://inspect/#remote-debugging and turn the toggle on')
+          console.error('  2. Yandex: open browser://inspect/#remote-debugging and turn the toggle on')
+          console.error('  3. Launch the browser with a debug port (non-default profile): <browser> --remote-debugging-port=9222 --user-data-dir=<dir>')
+          console.error('  4. Use the extension transport instead: playwriter session new --extension')
           process.exit(1)
         }
-        const serverUrl = await getServerUrl(options.host)
-        const result = await createDirectSession({ serverUrl, cdpEndpoint: selected.wsUrl!, browser: selected.browser, profiles: selected.profiles, token: options.token })
-        printSessionWarning(result)
-        printSessionCreated(`Session ${result.id} created (direct CDP). Use with: playwriter -s ${result.id} -e "..."`)
-        console.log(pc.dim('NOTE: Recording unavailable in direct CDP mode.'))
-        return
-      }
+        // Default mode: nothing found, fall through to the extension transport.
+        console.log(pc.dim('No browser with remote debugging found, falling back to the extension transport...'))
+      } else {
+        if (instances.length === 1 && !options.browser) {
+          const instance = instances[0]
+          const serverUrl = await getServerUrl(options.host)
+          const result = await createDirectSession({ serverUrl, cdpEndpoint: instance.wsUrl, browser: instance.browser, profiles: instance.profiles, token: options.token })
+          printSessionWarning(result)
+          const profileLabel = formatInstanceProfiles(instance)
+          printSessionCreated(
+            `Session ${result.id} created (direct CDP, ${instance.browser}${profileLabel}). Use with: playwriter -s ${result.id} -e "..."`,
+          )
+          console.log(pc.dim('NOTE: Recording unavailable in direct CDP mode.'))
+          return
+        }
 
-      printBrowserTable(directOptions)
-      console.log('\nRun again with --browser <key>.')
-      process.exit(1)
+        // Multiple instances or --browser specified
+        const directOptions = instances.map((instance) => {
+          return instanceToBrowserOption(instance)
+        })
+
+        if (options.browser) {
+          const selected = directOptions.find((opt) => {
+            return opt.key === options.browser
+          })
+          if (!selected) {
+            await handleCloudBrowserNotFound(options.browser, { hasCloudOptions: false })
+            console.error(`Browser not found: ${options.browser}`)
+            console.error('Available: ' + directOptions.map((opt) => opt.key).join(', '))
+            process.exit(1)
+          }
+          const serverUrl = await getServerUrl(options.host)
+          const result = await createDirectSession({ serverUrl, cdpEndpoint: selected.wsUrl!, browser: selected.browser, profiles: selected.profiles, token: options.token })
+          printSessionWarning(result)
+          printSessionCreated(`Session ${result.id} created (direct CDP). Use with: playwriter -s ${result.id} -e "..."`)
+          console.log(pc.dim('NOTE: Recording unavailable in direct CDP mode.'))
+          return
+        }
+
+        printBrowserTable(directOptions)
+        console.log('\nRun again with --browser <key>.')
+        process.exit(1)
+      }
     }
 
-    // Default mode: extension-based (existing behavior)
+    // Fallback mode: extension-based transport (existing behavior)
     let extensions: ExtensionStatus[] = []
 
     if (isLocal) {
@@ -1942,7 +1962,7 @@ cli
   })
 
 cli
-  .command('browser list', 'List all available browsers: extension-connected and direct CDP on port 9222')
+  .command('browser list', 'List all available browsers: extension-connected, direct CDP (Chrome, Chromium, Edge, Brave, Yandex, ...) and cloud')
   .option('--host <host>', z.string().describe('Remote relay server host'))
   .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
   .action(async (options) => {

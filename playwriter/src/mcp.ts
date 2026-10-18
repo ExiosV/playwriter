@@ -107,13 +107,14 @@ async function getDirectCdpConfig(): Promise<{ directCdpUrl: string } | null> {
     return null
   }
 
-  // Auto-discover: check default port 9222
+  // Auto-discover: check default CDP ports and known browsers' DevToolsActivePort
   if (directEnv === '1') {
     const instances = await discoverChromeInstances()
     if (instances.length === 0) {
       throw new Error(
-        'PLAYWRITER_DIRECT is set but no Chrome found on port 9222. ' +
-          'Enable debugging at chrome://inspect/#remote-debugging or launch with --remote-debugging-port=9222.',
+        'PLAYWRITER_DIRECT is set but no browser with remote debugging was found. ' +
+          'Enable debugging at chrome://inspect/#remote-debugging (Chrome/Edge/Brave), ' +
+          'launch the browser with --remote-debugging-port=9222, or unset PLAYWRITER_DIRECT to use the extension transport.',
       )
     }
     const sessionId = crypto.randomUUID()
@@ -372,6 +373,26 @@ export async function startMcp(options: { host?: string; token?: string } = {}) 
   }
   if (options.token) {
     process.env.PLAYWRITER_TOKEN = options.token
+  }
+
+  // Direct CDP is the default transport. When neither mode was requested
+  // explicitly, auto-discover every Chromium browser with debugging enabled
+  // (Chrome, Chromium, Edge, Brave, Yandex, ...) and use the first one. If
+  // nothing is found we fall back to the extension transport below, so existing
+  // setups keep working. Set PLAYWRITER_EXTENSION=1 to always use the extension.
+  if (!process.env.PLAYWRITER_DIRECT && !process.env.PLAYWRITER_EXTENSION) {
+    try {
+      const instances = await discoverChromeInstances()
+      if (instances.length > 0) {
+        process.env.PLAYWRITER_DIRECT = '1'
+        mcpLog(
+          `Defaulting to direct CDP (${instances[0].browser} on port ${instances[0].port}). ` +
+            'Set PLAYWRITER_EXTENSION=1 to force the extension transport.',
+        )
+      }
+    } catch {
+      // Ignore discovery failures and fall back to the extension transport.
+    }
   }
 
   // In direct CDP mode (PLAYWRITER_DIRECT env var), no relay server needed
