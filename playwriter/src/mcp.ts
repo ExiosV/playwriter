@@ -18,6 +18,7 @@ import { LOG_FILE_PATH, VERSION, parseRelayHost } from './utils.js'
 import { ensureRelayServer, RELAY_PORT } from './relay-client.js'
 import { PlaywrightExecutor, CodeExecutionTimeoutError } from './executor.js'
 import { discoverChromeInstances, resolveDirectInput, appendSessionToWsUrl } from './chrome-discovery.js'
+import { flattenCloudTabs, formatCloudTabs, resolveCloudTabRef, type CloudTabsResult } from './cloud-tabs.js'
 import crypto from 'node:crypto'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -89,6 +90,26 @@ const mcpLogger = {
     console.error(...args)
     void sendLogToRelayServer('error', ...args)
   },
+}
+
+function getRelayHttpBase(): string {
+  const remote = getRemoteConfig()
+  if (remote) {
+    return parseRelayHost(remote.host, remote.port).httpBaseUrl
+  }
+  return `http://127.0.0.1:${RELAY_PORT}`
+}
+
+function getRelayAuthHeaders(json = false): Record<string, string> {
+  const headers: Record<string, string> = {}
+  if (json) {
+    headers['Content-Type'] = 'application/json'
+  }
+  const token = process.env.PLAYWRITER_TOKEN
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  return headers
 }
 
 async function ensureRelayServerForMcp(): Promise<void> {
@@ -361,6 +382,86 @@ server.tool(
     } catch (error: any) {
       return {
         content: [{ type: 'text', text: `Failed to reset connection: ${error.message}` }],
+        isError: true,
+      }
+    }
+  },
+)
+
+server.tool(
+  'cloud_tabs',
+  dedent`
+    List the cloud (synced) tabs open on the user's OTHER signed-in browser devices — Chrome Sync, Yandex Browser, Edge and Brave.
+
+    Cloud tabs come from the browser extension's chrome.sessions API, so the Playwriter extension must be connected; a direct-CDP session cannot read them. Pass \`open\` to open a tab in the user's browser: its 1-based number from this listing, a full url, or a unique url fragment.
+  `,
+  {
+    open: z
+      .string()
+      .optional()
+      .describe('Open this cloud tab: its 1-based number from the listing, a url, or a unique url fragment'),
+    extensionId: z.string().optional().describe('Extension id to query when several browsers are connected'),
+  },
+  async ({ open, extensionId }) => {
+    try {
+      if (!getRemoteConfig()) {
+        await ensureRelayServerForMcp()
+      }
+
+      const query = extensionId ? `?extensionId=${encodeURIComponent(extensionId)}` : ''
+      const response = await fetch(`${getRelayHttpBase()}/cli/cloud-tabs${query}`, {
+        headers: getRelayAuthHeaders(),
+        signal: AbortSignal.timeout(20000),
+      })
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as { error?: string }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Could not read cloud tabs: ${body.error ?? response.status}. Cloud tabs need the Playwriter extension connected (chrome.sessions); direct CDP cannot see them.`,
+            },
+          ],
+          isError: true,
+        }
+      }
+
+      const result = (await response.json()) as CloudTabsResult
+
+      if (open !== undefined) {
+        const url = resolveCloudTabRef(flattenCloudTabs(result), open)
+        if (!url) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `No single cloud tab matches "${open}". Call cloud_tabs without \`open\` first to list them.`,
+              },
+            ],
+            isError: true,
+          }
+        }
+        const openResponse = await fetch(`${getRelayHttpBase()}/cli/cloud-tabs/open`, {
+          method: 'POST',
+          headers: getRelayAuthHeaders(true),
+          body: JSON.stringify({ url, extensionId }),
+          signal: AbortSignal.timeout(20000),
+        })
+        if (!openResponse.ok) {
+          const body = (await openResponse.json().catch(() => ({}))) as { error?: string }
+          return {
+            content: [{ type: 'text', text: `Could not open ${url}: ${body.error ?? openResponse.status}` }],
+            isError: true,
+          }
+        }
+        const opened = (await openResponse.json()) as { tabId?: number | null; url?: string }
+        return { content: [{ type: 'text', text: `Opened ${opened.url ?? url} in the user's browser.` }] }
+      }
+
+      return { content: [{ type: 'text', text: formatCloudTabs(result) }] }
+    } catch (error: any) {
+      return {
+        content: [{ type: 'text', text: `Failed to read cloud tabs: ${error.message}` }],
         isError: true,
       }
     }

@@ -362,6 +362,11 @@ export function getRemoteExtensionMethodRejection(method: string): string | null
   if (method === 'ghost-browser') {
     return 'Ghost Browser APIs are not available over Remote control.'
   }
+  // Cloud tabs expose the user's browsing on their other signed-in devices, and
+  // opening them creates tabs outside the shared tab-group contract.
+  if (method === 'getCloudTabs' || method === 'openCloudTab') {
+    return 'Cloud tabs are not available over Remote control.'
+  }
   return null
 }
 

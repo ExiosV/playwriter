@@ -30,6 +30,12 @@ import {
 } from './relay-client.js'
 import { discoverChromeInstances, resolveDirectInput, type DiscoveredInstance } from './chrome-discovery.js'
 import { getCloudClient, loadCloudAuth, saveCloudAuth, CloudClient, buildLiveUrl, type CloudAuth } from './cloud-client.js'
+import {
+  flattenCloudTabs,
+  formatCloudTabs,
+  resolveCloudTabRef,
+  type CloudTabsResult,
+} from './cloud-tabs.js'
 import { printTelemetryNoticeOnce } from './telemetry.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -368,6 +374,68 @@ async function executeCode(options: {
     } else {
       console.error(`Error: ${error.message}`)
     }
+    process.exit(1)
+  }
+}
+
+/**
+ * Cloud (synced) tabs come from the extension's chrome.sessions API, so the
+ * result is only meaningful when an extension is connected. Explain that
+ * clearly instead of printing a bare status code.
+ */
+async function printCloudTabsError(response: Awaited<ReturnType<typeof fetch>>): Promise<void> {
+  let payload: {
+    error?: string
+    extensions?: Array<{ extensionId: string; browser: string | null; email: string | null }>
+  } = {}
+  try {
+    payload = (await response.json()) as typeof payload
+  } catch {
+    // Non-JSON error body; fall through to the generic message.
+  }
+
+  if (response.status === 409) {
+    console.error('Error: no browser extension is connected, so cloud tabs cannot be read.')
+    console.error('Cloud tabs come from the extension (chrome.sessions); direct CDP cannot see them.')
+    console.error('Install the Playwriter extension in Chrome or Yandex, then retry.')
+    for (const ext of payload.extensions ?? []) {
+      console.error(`  - ${ext.extensionId}  ${ext.browser ?? 'unknown browser'}${ext.email ? ` (${ext.email})` : ''}`)
+    }
+    return
+  }
+
+  console.error(`Error: ${response.status} ${payload.error ?? ''}`.trim())
+}
+
+async function openCloudTab(options: {
+  serverUrl: string
+  token?: string
+  extension?: string
+  result: CloudTabsResult
+  ref: string
+}): Promise<void> {
+  const { serverUrl, token, extension, result, ref } = options
+  const url = resolveCloudTabRef(flattenCloudTabs(result), ref)
+  if (!url) {
+    console.error(`Error: no single cloud tab matches "${ref}". Run \`playwriter cloud-tabs\` to list them.`)
+    process.exit(1)
+  }
+
+  try {
+    const response = await fetch(`${serverUrl}/cli/cloud-tabs/open`, {
+      method: 'POST',
+      headers: buildAuthHeaders({ token, json: true }),
+      body: JSON.stringify({ url, extensionId: extension }),
+      signal: AbortSignal.timeout(20000),
+    })
+    if (!response.ok) {
+      await printCloudTabsError(response)
+      process.exit(1)
+    }
+    const opened = (await response.json()) as { tabId?: number | null; url?: string }
+    console.log(`Opened ${opened.url ?? url}${opened.tabId ? ` (tab ${opened.tabId})` : ''}`)
+  } catch (error: any) {
+    console.error(`Error: ${error.message}`)
     process.exit(1)
   }
 }
@@ -1344,6 +1412,64 @@ cli
           stateStr,
       )
     }
+  })
+
+cli
+  .command(
+    'cloud-tabs',
+    'List cloud (synced) tabs from your other signed-in browser devices (Chrome Sync, Yandex, Edge, Brave)',
+  )
+  .option('--host <host>', 'Remote relay server host')
+  .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
+  .option('--extension <id>', 'Extension/browser to query when several are connected')
+  .option('--json', 'Print the raw JSON result')
+  .option('--open <ref>', 'Open a cloud tab by its list number, url, or a unique url fragment')
+  .action(async (options) => {
+    if (!options.host && !process.env.PLAYWRITER_HOST) {
+      await ensureRelayServer({ logger: console })
+    }
+
+    const serverUrl = await getServerUrl(options.host)
+    const extension = options.extension ? String(options.extension) : undefined
+
+    let result: CloudTabsResult
+    try {
+      const query = extension ? `?extensionId=${encodeURIComponent(extension)}` : ''
+      const response = await fetch(`${serverUrl}/cli/cloud-tabs${query}`, {
+        headers: buildAuthHeaders({ token: options.token }),
+        signal: AbortSignal.timeout(20000),
+      })
+      if (!response.ok) {
+        await printCloudTabsError(response)
+        process.exit(1)
+      }
+      result = (await response.json()) as CloudTabsResult
+    } catch (error: any) {
+      if (error.cause?.code === 'ECONNREFUSED') {
+        console.error('Error: Cannot connect to relay server.')
+      } else {
+        console.error(`Error: ${error.message}`)
+      }
+      process.exit(1)
+    }
+
+    if (options.open !== undefined) {
+      await openCloudTab({
+        serverUrl,
+        token: options.token,
+        extension,
+        result,
+        ref: String(options.open),
+      })
+      return
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
+
+    console.log(formatCloudTabs(result))
   })
 
 cli

@@ -52,6 +52,10 @@ Each session has **isolated state**. Browser tabs are **shared** across sessions
 playwriter browser start             # auto-finds Chrome for Testing or Chromium, with recording flags enabled
 playwriter browser start /path/to/browser-binary
 
+# Cloud (synced) tabs from your other signed-in browser devices
+playwriter cloud-tabs
+playwriter cloud-tabs --open 3
+
 # Session management
 playwriter session new              # creates stateful sandbox, outputs id (e.g. 1)
 playwriter session new --tab-group agent1 --tab-group-color blue
@@ -319,6 +323,26 @@ transport automatically. Force the extension with `--extension` (or
 endpoint, e.g. `--direct ws://127.0.0.1:9222` or `--direct host:port`.
 
 Cloud browsers (`--browser cloud`) are unchanged and still available.
+
+### Cloud (synced) tabs
+
+`playwriter cloud-tabs` lists the tabs open on your **other signed-in browser
+devices** and can open one in your browser. It reads the extension
+`chrome.sessions` API, so it works for **Chrome Sync, Yandex Browser sync, Edge
+and Brave**:
+
+```bash
+playwriter cloud-tabs                  # list tabs from your other devices
+playwriter cloud-tabs --json           # raw JSON
+playwriter cloud-tabs --extension <id> # pick a browser when several are connected
+playwriter cloud-tabs --open 3         # open the 3rd listed tab
+playwriter cloud-tabs --open docs.example.com
+```
+
+Do not confuse these with cloud **browsers** (`--browser cloud`, the remote VM
+feature). Cloud *tabs* require the Playwriter extension to be connected — CDP has
+no equivalent of `chrome.sessions` — and browser sync signed in on at least two
+devices with tab syncing enabled.
 
 ## Architecture
 

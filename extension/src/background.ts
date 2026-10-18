@@ -38,6 +38,7 @@ import {
   getRemoteExtensionMethodRejection,
   namespaceRemoteTabGroupKey,
 } from 'playwriter/src/remote-control'
+import { normalizeCloudTabs, type CloudTabsResult } from 'playwriter/src/cloud-tabs'
 // Inlined at build time via vite ?raw. Source: playwriter/src/ghost-cursor-client.ts
 import ghostCursorBundleCode from '../../playwriter/dist/ghost-cursor-client.js?raw'
 // Bippy: React fiber introspection library, used for "Copy React Source Path" context menu.
@@ -886,6 +887,23 @@ export function sendMessage(message: any): void {
   broadcastEventToRemoteRelays(message)
 }
 
+// Cloud (synced) tabs from the user's other signed-in devices. chrome.sessions
+// is backed by Chrome Sync and by Yandex Browser's own sync, so the same call
+// reads cloud tabs in every Chromium browser Playwriter supports. Some builds
+// expose no sessions API and it also throws while the user is signed out, so
+// failures degrade to an empty result instead of breaking the relay connection.
+async function collectCloudTabs(): Promise<CloudTabsResult> {
+  const sessionsApi = chrome.sessions as typeof chrome.sessions | undefined
+  if (!sessionsApi?.getDevices) {
+    return normalizeCloudTabs({ unsupported: true })
+  }
+  const [devices, recentlyClosed] = await Promise.all([
+    sessionsApi.getDevices().catch(() => []),
+    sessionsApi.getRecentlyClosed().catch(() => []),
+  ])
+  return normalizeCloudTabs({ devices, recentlyClosed })
+}
+
 // Handles one relay-bound protocol message from either the local relay WS or a
 // tunneled remote relay connection. Responses go back through the originating
 // sink so message ids from different relays never collide.
@@ -920,6 +938,33 @@ async function dispatchRelayMessage(message: any, sink: RelayMessageSink): Promi
       }
       return
     }
+  }
+
+  // Cloud (synced) tabs from the user's other signed-in devices.
+  if (message.method === 'getCloudTabs') {
+    try {
+      sink.send({ id: message.id, result: await collectCloudTabs() })
+    } catch (error: any) {
+      sink.send({ id: message.id, error: error?.message || String(error) })
+    }
+    return
+  }
+
+  // Open a cloud tab as a normal tab in the browser the user is looking at.
+  if (message.method === 'openCloudTab') {
+    try {
+      const params = message.params as { url?: unknown } | undefined
+      const url = typeof params?.url === 'string' ? params.url.trim() : ''
+      if (!url) {
+        sink.send({ id: message.id, error: 'openCloudTab requires a url' })
+        return
+      }
+      const tab = await chrome.tabs.create({ url, active: true })
+      sink.send({ id: message.id, result: { tabId: tab.id ?? null, url: tab.url ?? url } })
+    } catch (error: any) {
+      sink.send({ id: message.id, error: error?.message || String(error) })
+    }
+    return
   }
 
   // Handle createInitialTab - create a new tab when Playwright connects and no tabs exist
