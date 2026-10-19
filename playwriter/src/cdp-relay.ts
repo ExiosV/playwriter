@@ -2436,6 +2436,48 @@ export async function startPlayWriterCDPRelayServer({
     }
   })
 
+  // Open multiple cloud tabs in a single new browser window.
+  // Used by `playwriter yandex-tabs --open-group` to batch-open an entire
+  // device/window group without flooding the user's current window.
+  app.post('/cli/cloud-tabs/open-group', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { extensionId?: string | null; urls?: unknown }
+    const requestedId = body.extensionId || null
+    const allowDefault = !requestedId && relayState.getLocalExtensions(store.getState()).length === 1
+    const conn = getExtensionConnection(requestedId, { allowFallback: allowDefault })
+    if (!conn) {
+      return c.json({ error: 'No browser extension is connected', code: 'no-extension' }, 409)
+    }
+
+    // Validate and cap the url list.
+    const rawUrls = Array.isArray(body.urls) ? body.urls : []
+    const urls: string[] = []
+    for (const u of rawUrls) {
+      if (typeof u === 'string' && u.trim()) {
+        urls.push(u.trim())
+      }
+    }
+    // Safety cap — never open more than 25 tabs in one group.
+    const capped = urls.slice(0, 25)
+    if (capped.length !== urls.length) {
+      return c.json({ error: `Too many URLs (${urls.length}); capped to 25` }, 400)
+    }
+    if (capped.length === 0) {
+      return c.json({ error: 'urls is required and must be a non-empty array' }, 400)
+    }
+
+    try {
+      const result = await sendToExtension({
+        extensionId: conn.id,
+        method: 'openCloudTabs',
+        params: { urls: capped },
+        timeout: 30000,
+      })
+      return c.json(result ?? { success: true, opened: capped.length })
+    } catch (error: any) {
+      return c.json({ error: error?.message || String(error) }, 502)
+    }
+  })
+
   app.get('/cli/session/suggest', (c) => {
     return c.json({ next: nextSessionNumber })
   })

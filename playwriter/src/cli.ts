@@ -36,6 +36,7 @@ import {
   resolveCloudTabRef,
   type CloudTabsResult,
 } from './cloud-tabs.js'
+import { readYandexTabs, formatYandexTabs, resolveYandexTabRefs } from './yandex-tabs.js'
 import { printTelemetryNoticeOnce } from './telemetry.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -1471,6 +1472,148 @@ cli
 
     console.log(formatCloudTabs(result))
   })
+
+// Yandex Cloud Tabs — read synced tabs from the local profile files (no extension needed).
+cli
+  .command(
+    'yandex-tabs',
+    'Read cloud (synced) tabs directly from a Yandex Browser profile\'s local files. Works even when the extension is disconnected.',
+  )
+  .option('--host <host>', 'Remote relay server host (used for --open / --open-group)')
+  .option('--token <token>', 'Authentication token (or use PLAYWRITER_TOKEN env var)')
+  .option('--profile <dir>', 'Yandex Browser profile directory (auto-detected if omitted)')
+  .option('--limit <n>', 'Maximum number of device groups to show (default 30). Use --all to lift.')
+  .option('--all', 'Show all groups without the limit cap')
+  .option('--json', 'Print the raw JSON result')
+  .option('--device <name>', 'Only show tabs from this device (by name)')
+  .option('--open <ref>', 'Open a single tab by its list number, url, or unique fragment')
+  .option('--open-group <ref>', 'Open all tabs of one group in a new browser window — ref is the group index (1-based) from this listing')
+  .action(async (options) => {
+    const limit = options.all ? undefined : Number(options.limit ?? 30)
+
+    let result: ReturnType<typeof readYandexTabs>
+    try {
+      result = readYandexTabs({ profileDir: options.profile, limit })
+    } catch (error: any) {
+      console.error(`Error reading Yandex profile: ${error.message}`)
+      process.exit(1)
+    }
+
+    // Apply device filter.
+    if (options.device !== undefined) {
+      const dev = String(options.device).toLowerCase()
+      result.groups = result.groups.filter((g) => g.deviceName.toLowerCase().includes(dev))
+      // Recount total from filtered groups.
+      result.totalCount = result.groups.reduce((sum, g) => sum + g.tabs.length, 0)
+    }
+
+    if (options.openGroup !== undefined) {
+      await openYandexTabGroup({
+        serverUrl: await getServerUrl(options.host),
+        token: options.token,
+        result,
+        ref: String(options.openGroup),
+      })
+      return
+    }
+
+    if (options.open !== undefined) {
+      const url = resolveYandexTabRefs(result, String(options.open))?.singleUrl
+      if (!url) {
+        console.error(`Error: no single cloud tab matches "${options.open}". Run \`playwriter yandex-tabs\` to list them.`)
+        process.exit(1)
+      }
+      // Use the existing relay openCloudTab endpoint.
+      try {
+        const serverUrl = await getServerUrl(options.host)
+        const response = await fetch(`${serverUrl}/cli/cloud-tabs/open`, {
+          method: 'POST',
+          headers: buildAuthHeaders({ token: options.token, json: true }),
+          body: JSON.stringify({ url }),
+          signal: AbortSignal.timeout(20000),
+        })
+        if (!response.ok) {
+          await printCloudTabsError(response)
+          process.exit(1)
+        }
+        const opened = (await response.json()) as { tabId?: number | null; url?: string }
+        console.log(`Opened ${opened.url ?? url}${opened.tabId ? ` (tab ${opened.tabId})` : ''}`)
+      } catch (error: any) {
+        console.error(`Error opening tab: ${error.message}`)
+        process.exit(1)
+      }
+      return
+    }
+
+    if (options.json) {
+      const output = {
+        groups: result.groups.map((g) => ({
+          deviceName: g.deviceName,
+          sessionId: g.sessionId,
+          windowId: g.windowId,
+          tabs: g.tabs,
+        })),
+        totalCount: result.totalCount,
+        ...(result.deviceMapError ? { error: result.deviceMapError } : {}),
+      }
+      console.log(JSON.stringify(output, null, 2))
+      return
+    }
+
+    console.log(formatYandexTabs(result))
+  })
+
+async function openYandexTabGroup(options: {
+  serverUrl: string
+  token?: string
+  result: ReturnType<typeof readYandexTabs>
+  ref: string
+}): Promise<void> {
+  const { serverUrl, token, result, ref } = options
+  // Find the group by its 1-based index in the listing.
+  let idx = 0
+  let targetGroup: (typeof result.groups)[number] | undefined
+  for (const group of result.groups) {
+    if (idx + 1 === Number(ref)) {
+      targetGroup = group
+      break
+    }
+    idx += 1
+  }
+  if (!targetGroup || !targetGroup.tabs.length) {
+    console.error(`Error: no group matches "${ref}". Run \`playwriter yandex-tabs\` to list groups.`)
+    process.exit(1)
+  }
+
+  // Cap the number of tabs opened per group (safety against tab explosion).
+  const MAX_OPEN_PER_GROUP = 25
+  const urls = targetGroup.tabs.slice(0, MAX_OPEN_PER_GROUP).map((t) => t.url)
+
+  if (urls.length === 0) {
+    console.error('Error: selected group has no tabs to open.')
+    process.exit(1)
+  }
+
+  try {
+    const response = await fetch(`${serverUrl}/cli/cloud-tabs/open-group`, {
+      method: 'POST',
+      headers: buildAuthHeaders({ token, json: true }),
+      body: JSON.stringify({ urls, extensionId: undefined }),
+      signal: AbortSignal.timeout(30000),
+    })
+    if (!response.ok) {
+      let payload: { error?: string } = {}
+      try { payload = (await response.json()) as typeof payload } catch { /* skip */ }
+      console.error(`Error ${response.status}: ${payload.error ?? 'open-group failed'}`)
+      process.exit(1)
+    }
+    const opened = (await response.json()) as { windowId?: number; opened: number }
+    console.log(`Opened ${opened.opened} tab${opened.opened === 1 ? '' : 's'} in a new window (group "${targetGroup.deviceName}"${targetGroup.windowId !== undefined ? `, window ${targetGroup.windowId}` : ''}).`)
+  } catch (error: any) {
+    console.error(`Error opening group: ${error.message}`)
+    process.exit(1)
+  }
+}
 
 cli
   .command('session delete <sessionId>', 'Delete a session and clear its state')
