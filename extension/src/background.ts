@@ -967,6 +967,39 @@ async function dispatchRelayMessage(message: any, sink: RelayMessageSink): Promi
     return
   }
 
+  // Open multiple cloud tabs in a single new browser window.
+  // Used by `playwriter yandex-tabs --open-group` to batch-open an entire
+  // device/window group without flooding the user's current window.
+  if (message.method === 'openCloudTabs') {
+    try {
+      const params = message.params as { urls?: unknown } | undefined
+      const rawUrls = Array.isArray(params?.urls) ? params.urls : []
+      const urls: string[] = []
+      for (const u of rawUrls) {
+        if (typeof u === 'string' && u.trim()) urls.push(u.trim())
+      }
+      if (urls.length === 0) {
+        sink.send({ id: message.id, error: 'openCloudTabs requires a non-empty urls array' })
+        return
+      }
+      // Safety cap.
+      const capped = urls.slice(0, 25)
+
+      // Open the first URL in a new window; remaining URLs as tabs in that window.
+      const [firstUrl, ...restUrls] = capped
+      const win = await chrome.windows.create({ url: firstUrl, focused: true })
+      for (const url of restUrls) {
+        try {
+          await chrome.tabs.create({ url, windowId: win.id, active: false })
+        } catch { /* skip tabs that fail to open */ }
+      }
+      sink.send({ id: message.id, result: { windowId: win.id ?? null, opened: capped.length } })
+    } catch (error: any) {
+      sink.send({ id: message.id, error: error?.message || String(error) })
+    }
+    return
+  }
+
   // Handle createInitialTab - create a new tab when Playwright connects and no tabs exist
   // We use skipAttachedEvent: true because the relay's Target.setAutoAttach handler will send
   // Target.attachedToTarget for all targets in connectedTargets. If we also sent it here,

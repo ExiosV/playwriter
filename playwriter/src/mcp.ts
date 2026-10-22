@@ -19,6 +19,7 @@ import { ensureRelayServer, RELAY_PORT } from './relay-client.js'
 import { PlaywrightExecutor, CodeExecutionTimeoutError } from './executor.js'
 import { discoverChromeInstances, resolveDirectInput, appendSessionToWsUrl } from './chrome-discovery.js'
 import { flattenCloudTabs, formatCloudTabs, resolveCloudTabRef, type CloudTabsResult } from './cloud-tabs.js'
+import { readYandexTabs, formatYandexTabs, resolveYandexTabRefs } from './yandex-tabs.js'
 import crypto from 'node:crypto'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -462,6 +463,109 @@ server.tool(
     } catch (error: any) {
       return {
         content: [{ type: 'text', text: `Failed to read cloud tabs: ${error.message}` }],
+        isError: true,
+      }
+    }
+  },
+)
+
+// Yandex Cloud Tabs — reads synced tabs from the local profile files.
+// Works even when the extension is disconnected or chrome.sessions.getDevices() returns empty (Yandex).
+server.tool(
+  'yandex_tabs',
+  dedent`
+    Read cloud (synced) tabs directly from a Yandex Browser profile's local files.
+
+    Unlike \`cloud_tabs\`, this does NOT need the Playwriter extension — it reads the browser's own sync database on disk. This is useful when chrome.sessions.getDevices() returns empty in Yandex (the API doesn't wire Chromium's OpenTabsUIDelegate).
+
+    Options:
+    - \\\`device\\\`: filter by device name (e.g. "DEVICEX2")
+    - \\\`limit\\\`: max groups to show (default 30, use a large number or omit for all)
+    - \\\`open\\\`: open one tab — its 1-based index from the listing, url, or unique fragment
+    - \\\`openGroup\\\`: open ALL tabs of one group in a new browser window — the group's 1-based index from this listing. Capped at 25 tabs per group to prevent flooding.
+
+    The result is grouped by device → window (group). Each group can be opened as a single new browser window with \\\`openGroup\\\`.
+  `,
+  {
+    device: z.string().optional().describe('Filter by device name (e.g. "DEVICEX2")'),
+    limit: z.number().int().positive().optional().describe('Maximum number of device groups to show (default 30). Use a large number for all.'),
+    open: z.string().optional().describe('Open one tab: its 1-based index from the listing, url, or unique fragment'),
+    openGroup: z.number().int().positive().optional().describe('Open ALL tabs of one group in a new browser window — the group\'s 1-based index from this listing. Capped at 25 tabs per group.'),
+  },
+  async ({ device, limit, open, openGroup }) => {
+    try {
+      const result = readYandexTabs({ limit: limit ?? undefined })
+
+      // Apply device filter.
+      if (device) {
+        const dev = device.toLowerCase()
+        result.groups = result.groups.filter((g) => g.deviceName.toLowerCase().includes(dev))
+        result.totalCount = result.groups.reduce((sum, g) => sum + g.tabs.length, 0)
+      }
+
+      // Handle openGroup — batch open via relay.
+      if (openGroup !== undefined) {
+        await ensureRelayServerForMcp()
+        const idx = Number(openGroup) - 1
+        const group = result.groups[idx]
+        if (!group || !group.tabs.length) {
+          return {
+            content: [{ type: 'text', text: `No group at index ${openGroup}. Call yandex_tabs without openGroup to see available groups.` }],
+            isError: true,
+          }
+        }
+        const urls = group.tabs.slice(0, 25).map((t) => t.url)
+        try {
+          const response = await fetch(`${getRelayHttpBase()}/cli/cloud-tabs/open-group`, {
+            method: 'POST',
+            headers: getRelayAuthHeaders(true),
+            body: JSON.stringify({ urls }),
+            signal: AbortSignal.timeout(30000),
+          })
+          if (!response.ok) {
+            const body = (await response.json().catch(() => ({}))) as { error?: string }
+            return { content: [{ type: 'text', text: `Could not open group ${group.deviceName}: ${body.error ?? response.status}` }] }
+          }
+          const opened = (await response.json()) as { windowId?: number; opened: number }
+          return { content: [{ type: 'text', text: `Opened ${opened.opened} tab${opened.opened === 1 ? '' : 's'} in a new window for "${group.deviceName}"${group.windowId !== undefined ? ` (window ${group.windowId})` : ''}.` }] }
+        } catch (error: any) {
+          return { content: [{ type: 'text', text: `Failed to open group: ${error.message}` }] }
+        }
+      }
+
+      // Handle single tab open.
+      if (open !== undefined) {
+        const url = resolveYandexTabRefs(result, open)?.singleUrl
+        if (!url) {
+          return {
+            content: [{ type: 'text', text: `No single cloud tab matches "${open}". Call yandex_tabs without \`open\` first to list them.` }],
+            isError: true,
+          }
+        }
+        await ensureRelayServerForMcp()
+        const response = await fetch(`${getRelayHttpBase()}/cli/cloud-tabs/open`, {
+          method: 'POST',
+          headers: getRelayAuthHeaders(true),
+          body: JSON.stringify({ url }),
+          signal: AbortSignal.timeout(20000),
+        })
+        if (!response.ok) {
+          const body = (await response.json().catch(() => ({}))) as { error?: string }
+          return { content: [{ type: 'text', text: `Could not open ${url}: ${body.error ?? response.status}` }] }
+        }
+        const opened = (await response.json()) as { tabId?: number | null; url?: string }
+        return { content: [{ type: 'text', text: `Opened ${opened.url ?? url} in the user's browser.` }] }
+      }
+
+      // Default: print formatted listing.
+      const output = formatYandexTabs(result)
+      if (result.deviceMapError && result.groups.length === 0) {
+        return { content: [{ type: 'text', text: `${output}\n\nNote: ${result.deviceMapError}` }] }
+      }
+      return { content: [{ type: 'text', text: output }] }
+    } catch (error: any) {
+      return {
+        content: [{ type: 'text', text: `Failed to read Yandex tabs: ${error.message}` }],
         isError: true,
       }
     }
