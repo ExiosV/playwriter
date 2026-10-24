@@ -33,3 +33,16 @@ dist-release
 .env.preview
 .env.prod
 .dev.vars
+.env
+.env.local
+*.pem
+*.key
+__pycache__/
+*.pyc
+.venv/
+venv/
+.idea/
+Thumbs.db
+*.tmp
+*.bak
+node_modules/
